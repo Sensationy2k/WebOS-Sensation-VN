@@ -1,0 +1,10 @@
+{
+  "id": "com.gathin.tvhome.service",
+  "description": "Wallpaper helper for the launcher",
+  "services": [
+    {
+      "name": "com.gathin.tvhome.service",
+      "description": "Phone uploads and Bing pictures of the day"
+    }
+  ]
+}

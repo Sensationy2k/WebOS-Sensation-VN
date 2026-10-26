@@ -18,6 +18,30 @@ html, body {
   cursor: default;
 }
 
+/* ---- wallpaper ------------------------------------------------------------------------------- */
+
+#wallpaper {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+  opacity: 0;
+  transition: opacity 600ms ease;
+}
+
+body.hasWallpaper #wallpaper { opacity: 1; }
+
+/* Darker at the top and bottom, where the clock and the dock sit. */
+#wallpaper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.2) 32%, rgba(0, 0, 0, 0.3) 58%,
+    rgba(0, 0, 0, 0.78) 100%);
+}
+
+body.hasWallpaper #dockBand { background: rgba(20, 20, 22, 0.55); }
+
 /* ---- ambient glow ---------------------------------------------------------------------------- */
 
 .ambient {
@@ -115,7 +139,7 @@ body.scrolled header {
   display: flex;
   align-items: center;
   height: 84px;
-  margin-left: 20px;
+  margin-left: 16px;
   padding: 0 40px 0 32px;
   border-radius: 42px;
   border: 2px solid rgba(255, 255, 255, 0.22);
@@ -129,6 +153,13 @@ body.scrolled header {
 }
 
 .pill svg { width: 44px; height: 44px; margin-right: 18px; fill: currentColor; }
+
+/* Icon-only pill (Wallpaper). */
+.pill.round { width: 84px; padding: 0; justify-content: center; }
+.pill.round svg { margin-right: 0; }
+
+/* Long network names would push the pills into the date. */
+#wifiLabel { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
 
 .pill.focused {
   background: rgba(255, 255, 255, 0.96);
@@ -272,7 +303,7 @@ body.editing #glass { opacity: 0 !important; }
 
 /* ---- inputs dropdown ------------------------------------------------------------------------- */
 
-#inputsPanel {
+#inputsPanel, #tileMenu {
   position: absolute;
   z-index: 5;
   padding: 16px;
@@ -283,7 +314,7 @@ body.editing #glass { opacity: 0 !important; }
   transition: opacity 220ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 
-#inputsPanel.hidden { opacity: 0; transform: translateY(-16px) scaleY(0.92); pointer-events: none; }
+#inputsPanel.hidden, #tileMenu.hidden { opacity: 0; transform: translateY(-16px) scaleY(0.92); pointer-events: none; }
 
 .inputRow {
   display: flex;
@@ -300,7 +331,137 @@ body.editing #glass { opacity: 0 !important; }
 
 .inputRow.focused { background: rgba(255, 255, 255, 0.96); color: #000; }
 
+.menuTitle {
+  padding: 12px 24px 16px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 26px;
+  white-space: nowrap;
+}
+
 .separator { height: 2px; margin: 12px 24px; background: rgba(255, 255, 255, 0.12); }
+
+/* ---- wallpaper picker ------------------------------------------------------------------------ */
+
+#wallPanel {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  background: linear-gradient(180deg, #111114, #050506);
+  transition: opacity 240ms ease;
+}
+
+#wallPanel.hidden { opacity: 0; pointer-events: none; }
+
+#wpTitle {
+  position: absolute;
+  left: 112px;
+  top: 64px;
+  font-size: 72px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+}
+
+/* The focused picture's description (Bing's caption). */
+#wpCaption {
+  position: absolute;
+  left: 640px;
+  right: 112px;
+  top: 100px;
+  height: 40px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 26px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#wpPhone {
+  position: absolute;
+  left: 112px;
+  top: 200px;
+  width: 464px;
+  padding: 40px;
+  border-radius: 40px;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#wpQr {
+  width: 300px;
+  height: 300px;
+  margin: 0 auto 32px;
+  padding: 16px;
+  border-radius: 24px;
+  background: #fff;
+}
+
+#wpQr svg { display: block; width: 100%; height: 100%; }
+
+#wpPhoneTitle { font-size: 34px; font-weight: 500; }
+
+#wpPhoneText { margin-top: 12px; color: rgba(255, 255, 255, 0.65); font-size: 25px; line-height: 1.4; }
+
+#wpUrl { margin-top: 20px; font-size: 26px; font-weight: 500; letter-spacing: 0.02em; }
+
+#wpGridBox {
+  position: absolute;
+  left: 624px;
+  right: 96px;
+  top: 184px;
+  bottom: 40px;
+  overflow: hidden;
+}
+
+#wpGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 272px);
+  gap: 28px 26px;
+  padding: 16px;
+  transition: transform 320ms cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+
+.wpThumb {
+  position: relative;
+  width: 272px;
+  height: 153px;
+  border-radius: 22px;
+  background-color: #1c1c1e;
+  background-position: center;
+  background-size: cover;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.1);
+  transition: transform 220ms ease, box-shadow 220ms ease;
+}
+
+.wpThumb.plain { background-image: linear-gradient(160deg, #2a2a2e, #050506); }
+
+.wpCard.focused .wpThumb {
+  transform: scale(1.06);
+  box-shadow: 0 0 0 4px #fff, 0 12px 32px rgba(0, 0, 0, 0.6);
+}
+
+/* The wallpaper in use. */
+.wpCard.selected .wpThumb::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/%3E%3C/svg%3E") center / 26px no-repeat;
+}
+
+.wpName {
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 24px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wpCard.focused .wpName { color: #fff; }
 
 /* ---- toast ----------------------------------------------------------------------------------- */
 
@@ -315,7 +476,7 @@ body.editing #glass { opacity: 0 !important; }
   opacity: 0;
   transform: translateX(-50%);
   transition: opacity 200ms ease;
-  z-index: 6;
+  z-index: 8;
 }
 
 #toast.shown { opacity: 1; }

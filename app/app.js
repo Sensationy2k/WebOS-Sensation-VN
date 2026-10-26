@@ -17,7 +17,7 @@
   var GLASS_PAD = 12;           // room for the glass glow around the scaled tile
   var VIEW_TOP = 80, VIEW_BOTTOM = 1060;    // area grid rows scroll into (the header hides below the dock)
 
-  var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, OK: 13, BACK: 461, ESC: 27 };
+  var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, OK: 13, BACK: 461, ESC: 27, RED: 403, INFO: 457 };
 
   var GREETINGS = [[5, 'Good night'], [12, 'Good morning'], [17, 'Good afternoon'], [22, 'Good evening'], [24, 'Good night']];
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -30,11 +30,11 @@
   var $ = function (id) { return document.getElementById(id); };
   var stage = $('stage'), tilesEl = $('tiles'), glass = $('glass'), hero = $('hero');
   var ambients = [$('ambientA'), $('ambientB')], ambientFront = 0, ambientColor = null;
-  var pills = [$('btnInputs'), $('btnWifi'), $('btnSettings')];
-  var panel = $('inputsPanel');
+  var pills = [$('btnInputs'), $('btnWifi'), $('btnWallpaper'), $('btnLgHome'), $('btnSettings')];
+  var panel = $('inputsPanel'), tileMenu = $('tileMenu');
 
   var items = [];               // {app, el, color}
-  var zone = 'grid';            // 'grid' | 'top' | 'inputs'
+  var zone = 'grid';            // 'grid' | 'top' | 'inputs' | 'wall' | 'menu'
   var focused = 0, pillFocus = 0, inputFocus = 0, inputRows = [];
   var offset = 0, heroShown = false, glassShown = false;
   var editing = null;           // {item, snapshot} while a tile is being moved
@@ -54,9 +54,19 @@
       };
       bridges.push(b);
       b.call(uri, JSON.stringify(params || {}));
+      return b;
     } catch (e) {
       if (cb) cb({ returnValue: false, errorText: String(e) });   // not on a TV (desktop preview)
+      return null;
     }
+  }
+
+  /** Ends a subscription made with luna(). */
+  function unsubscribe(b) {
+    if (!b) return;
+    try { b.cancel(); } catch (e) { /* already gone */ }
+    var i = bridges.indexOf(b);
+    if (i >= 0) bridges.splice(i, 1);
   }
 
   function launch(id, title, params) {
@@ -82,6 +92,8 @@
     all.forEach(function (a) { byId[a.id] = a; });
     var hidden = {};
     (CONFIG.hiddenApps || []).forEach(function (id) { hidden[id] = true; });
+    idList(HIDDEN_KEY).forEach(function (id) { hidden[id] = true; });   // hidden from the tile menu
+    removedIds().forEach(function (id) { hidden[id] = true; });
     var byTitle = function (a, b) { return a.title.toLowerCase() < b.title.toLowerCase() ? -1 : 1; };
 
     // An order arranged on the TV wins, until dockApps in config.js changes.
@@ -186,26 +198,30 @@
    * reads as a banner. LG's system icons are glyphs on transparent: use the app's own colour.
    */
   function paintTile(item, img) {
-    var px = null, edge = null;
-    try {
-      var c = document.createElement('canvas');
-      c.width = 12; c.height = 12;
-      var g = c.getContext('2d');
-      g.drawImage(img, 0, 0, 12, 12);
-      px = g.getImageData(0, 0, 12, 12).data;
-      edge = edgeColor(img);
-    } catch (e) { /* tainted canvas: fall back to the app's colour */ }
+    // sync-apps.py works the colours out ahead of time: the TV taints canvases drawn from file://.
+    var px = null, bg = parseColor(item.app.bg), glow = parseColor(item.app.glow);
+    if (!glow) {
+      try {
+        var c = document.createElement('canvas');
+        c.width = 12; c.height = 12;
+        var g = c.getContext('2d');
+        g.drawImage(img, 0, 0, 12, 12);
+        px = g.getImageData(0, 0, 12, 12).data;
+        var edge = edgeColor(img);
+        if (edge[3] > 200) bg = [edge[0], edge[1], edge[2]];
+      } catch (e) { /* tainted canvas: fall back to the app's colour */ }
+    }
 
     var glyphColor = null;
-    if (edge && edge[3] > 200) {
-      item.card.style.background = 'rgb(' + edge[0] + ',' + edge[1] + ',' + edge[2] + ')';
+    if (bg) {
+      item.card.style.background = 'rgb(' + bg.join(',') + ')';
     } else {
       item.card.classList.add('glyph');
       item.card.style.background = glyphBackground(item.app.iconColor);
       glyphColor = glyphBackground(item.app.iconColor) === '#2c2c2e' ? null : parseColor(item.app.iconColor);
     }
     // A white glyph says nothing about the app: glow in the tile's colour instead.
-    item.color = glyphColor || (px ? vividColor(px) : parseColor(item.app.iconColor));
+    item.color = glyphColor || glow || (px ? vividColor(px) : parseColor(item.app.iconColor));
     if (items[focused] === item) setAmbient(item.color);
   }
 
@@ -436,7 +452,17 @@
   function activatePill(i) {
     if (i === 0) showInputs();
     else if (i === 1) launch('com.palm.app.settings', 'Settings', { target: 'network' });
+    else if (i === 2) showWallPanel();
+    else if (i === 3) openLgHome();
     else launch('com.palm.app.settings', 'Settings');
+  }
+
+  /**
+   * LG's home, for its menus. The Home watcher on the TV sends LG's home straight back here, so
+   * first tell it (through the service) that this one is on purpose.
+   */
+  function openLgHome() {
+    luna(SERVICE + 'allowLgHome', {}, function () { launch('com.webos.app.home', 'LG Home'); });
   }
 
   // ---- inputs dropdown -----------------------------------------------------------------------
@@ -489,6 +515,342 @@
     focusPill(0);
   }
 
+  // ---- wallpaper -----------------------------------------------------------------------------
+
+  /*
+   * The wallpaper is Bing's picture of the day (kept current), one picked from Bing's last fortnight,
+   * or a picture sent from a phone. Phones send it to a page the bundled service serves on the LAN
+   * while this panel is open; the picture itself is kept in localStorage.
+   */
+  var SERVICE = 'luna://com.gathin.tvhome.service/';
+  var SHARE_LATEST = 'http://127.0.0.1:8099/latest';
+  var WP_KEY = 'tvhome.wallpaper', WP_PHOTO_KEY = 'tvhome.wallpaper.photo', WP_BING_KEY = 'tvhome.wallpaper.bing';
+  var WP_COLUMNS = 4;
+  var wallPanel = $('wallPanel'), wpGrid = $('wpGrid');
+  var wpCards = [], wpFocus = -1, wpOffset = 0, wpBing = [], shareBridge = null;
+
+  function load(key, json) {
+    try {
+      var v = localStorage.getItem(key);
+      return json ? JSON.parse(v) : v;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** false when localStorage refuses it, e.g. a picture too big. */
+  function store(key, value) {
+    try {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function today() {
+    var d = new Date();
+    return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  }
+
+  /** Bing's pictures, newest first, asked of the service at most once a day. */
+  function bingImages(cb) {
+    var cache = load(WP_BING_KEY, true);
+    if (cache && cache.day === today() && cache.images.length) { cb(cache.images); return; }
+    luna(SERVICE + 'bing', {}, function (res) {
+      if (res.returnValue && res.images && res.images.length) {
+        store(WP_BING_KEY, { day: today(), images: res.images });
+        cb(res.images);
+      } else {
+        cb(cache ? cache.images : []);   // offline: yesterday's list beats none
+      }
+    });
+  }
+
+  function currentWallpaper() { return load(WP_KEY, true) || { mode: 'none' }; }
+
+  function showWallpaper(url) {
+    if (!url) { document.body.classList.remove('hasWallpaper'); return; }
+    var img = new Image();
+    img.onload = function () {   // swap only once it has loaded, so a slow picture doesn't flash black
+      $('wallpaper').style.backgroundImage = 'url("' + url + '")';
+      document.body.classList.add('hasWallpaper');
+    };
+    img.src = url;
+  }
+
+  function applyWallpaper() {
+    var wp = currentWallpaper();
+    if (wp.mode === 'photo') showWallpaper(load(WP_PHOTO_KEY));
+    else if (wp.mode === 'bing') showWallpaper(wp.url);
+    else if (wp.mode === 'daily') bingImages(function (images) { showWallpaper(images.length ? images[0].url : null); });
+    else showWallpaper(null);
+  }
+
+  function chooseWallpaper(wp) {
+    store(WP_KEY, wp);
+    applyWallpaper();
+    markSelected();
+  }
+
+  function showWallPanel() {
+    wallPanel.classList.remove('hidden');
+    pills[pillFocus].classList.remove('focused');
+    zone = 'wall';
+    wpFocus = -1;   // start on the wallpaper in use
+    buildWallCards(wpBing);
+    bingImages(buildWallCards);
+    $('wpQr').innerHTML = '';
+    $('wpUrl').textContent = 'Đang mở…';
+    unsubscribe(shareBridge);
+    shareBridge = luna(SERVICE + 'share', { subscribe: true }, function (res) {
+      if (res.returnValue === false) { $('wpUrl').textContent = 'Không mở được trang gửi ảnh'; return; }
+      if (res.url) showQr(res.url);
+      if (res.uploaded) fetchUpload();
+    });
+  }
+
+  /** Closes the panel; the service takes the phone page down with the subscription. */
+  function closeWallPanel() {
+    wallPanel.classList.add('hidden');
+    unsubscribe(shareBridge);
+    shareBridge = null;
+    zone = 'none';
+  }
+
+  function showQr(url) {
+    var qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+    $('wpQr').innerHTML = qr.createSvgTag({ cellSize: 8, margin: 0, scalable: true });
+    $('wpUrl').textContent = url.replace(/\/$/, '');
+  }
+
+  /** The picture a phone just sent, from the service, into localStorage. */
+  function fetchUpload() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', SHARE_LATEST + '?' + Date.now());
+    xhr.responseType = 'blob';
+    xhr.onload = function () {
+      if (xhr.status !== 200) { toast('Không nhận được ảnh'); return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        if (!store(WP_PHOTO_KEY, reader.result)) { toast('Ảnh quá lớn'); return; }
+        chooseWallpaper({ mode: 'photo' });
+        wpFocus = -1;
+        buildWallCards(wpBing);
+        toast('Đã đổi hình nền');
+      };
+      reader.readAsDataURL(xhr.response);
+    };
+    xhr.onerror = function () { toast('Không nhận được ảnh'); };
+    xhr.send();
+  }
+
+  function buildWallCards(images) {
+    wpBing = images;
+    wpGrid.innerHTML = '';
+    wpCards = [];
+    addWallCard({ mode: 'none' }, 'Mặc định', null, '');
+    addWallCard({ mode: 'daily' }, 'Bing mỗi ngày', images.length ? images[0].thumb : null,
+      'Ảnh Bing của hôm nay, tự đổi mỗi ngày');
+    var photo = load(WP_PHOTO_KEY);
+    if (photo) addWallCard({ mode: 'photo' }, 'Ảnh từ điện thoại', photo, '');
+    images.forEach(function (im) {
+      var d = String(im.date);
+      addWallCard({ mode: 'bing', url: im.url }, 'Bing ' + d.slice(6, 8) + '/' + d.slice(4, 6), im.thumb, im.title);
+    });
+    markSelected();
+    if (zone !== 'wall') return;
+    var cur = currentWallpaper(), sel = 0;
+    wpCards.forEach(function (c, i) { if (sameWallpaper(c.wp, cur)) sel = i; });
+    var i = wpFocus < 0 ? sel : wpFocus;
+    wpFocus = -1;
+    focusWallCard(i);
+  }
+
+  function addWallCard(wp, label, thumb, caption) {
+    var el = document.createElement('div');
+    el.className = 'wpCard';
+    var t = document.createElement('div');
+    t.className = 'wpThumb' + (thumb ? '' : ' plain');
+    if (thumb) t.style.backgroundImage = 'url("' + thumb + '")';
+    el.appendChild(t);
+    var name = document.createElement('div');
+    name.className = 'wpName';
+    name.textContent = label;
+    el.appendChild(name);
+    el.wp = wp;
+    el.caption = caption;
+    var idx = wpCards.length;
+    el.addEventListener('mouseover', function () { focusWallCard(idx); });
+    el.addEventListener('click', function () { chooseWallpaper(wp); });
+    wpCards.push(el);
+    wpGrid.appendChild(el);
+  }
+
+  function sameWallpaper(a, b) { return a.mode === b.mode && (a.mode !== 'bing' || a.url === b.url); }
+
+  function markSelected() {
+    var cur = currentWallpaper();
+    wpCards.forEach(function (c) { c.classList.toggle('selected', sameWallpaper(c.wp, cur)); });
+  }
+
+  function focusWallCard(i) {
+    if (!wpCards.length) return;
+    if (wpCards[wpFocus]) wpCards[wpFocus].classList.remove('focused');
+    wpFocus = Math.max(0, Math.min(i, wpCards.length - 1));
+    var c = wpCards[wpFocus];
+    c.classList.add('focused');
+    $('wpCaption').textContent = c.caption;
+    // Scroll just enough to keep the focused row in view.
+    var boxH = $('wpGridBox').clientHeight, top = c.offsetTop, bottom = top + c.offsetHeight + 16;
+    if (bottom - wpOffset > boxH) wpOffset = bottom - boxH;
+    if (top - 16 < wpOffset) wpOffset = Math.max(0, top - 16);
+    wpGrid.style.transform = 'translateY(' + (-wpOffset) + 'px)';
+  }
+
+  // ---- tile menu: hold OK on a tile -------------------------------------------------------
+
+  // App ids hidden or uninstalled from the menu, kept on the TV. Uninstalled ones are dropped
+  // from the tiles until the next sync-apps.py, which no longer lists them (or lists them again
+  // when they were reinstalled).
+  var HIDDEN_KEY = 'tvhome.hidden', REMOVED_KEY = 'tvhome.removed';
+  var menuRows = [], menuFocus = 0;
+
+  function idList(key) {
+    var l = load(key, true);
+    return Array.isArray(l) ? l : [];
+  }
+
+  function removedIds() {
+    var synced = (window.TV_APPS && TV_APPS.synced) || 0;
+    var removed = load(REMOVED_KEY, true) || {};
+    return Object.keys(removed).filter(function (id) { return removed[id] > synced; });
+  }
+
+  function titleOf(id) {
+    var all = (window.TV_APPS && TV_APPS.apps) || [];
+    for (var i = 0; i < all.length; i++) if (all[i].id === id) return all[i].title;
+    return id;
+  }
+
+  /** LG's own apps and Homebrew Channel (the root everything here runs on) stay installed. */
+  function canRemove(id) {
+    return !/^com\.(webos|palm|lge)\./.test(id) && id !== 'org.webosbrew.hbchannel';
+  }
+
+  function openTileMenu() {
+    var it = items[focused];
+    if (!it) return;
+    var rows = [
+      { label: 'Di chuyển', run: startEdit },
+      { label: 'Ẩn', run: function () { hideApp(it.app); } }
+    ];
+    if (canRemove(it.app.id)) rows.push({ label: 'Gỡ cài đặt', run: function () { confirmRemove(it); } });
+    var nHidden = idList(HIDDEN_KEY).length;
+    if (nHidden) rows.push({ label: 'Hiện lại app đã ẩn (' + nHidden + ')', run: showHiddenMenu });
+    showMenu(it.app.title, rows, 0);
+  }
+
+  /** A small menu beside the focused tile; OK runs a row, Back closes. */
+  function showMenu(title, rows, focusIndex) {
+    tileMenu.innerHTML = '';
+    var t = document.createElement('div');
+    t.className = 'menuTitle';
+    t.textContent = title;
+    tileMenu.appendChild(t);
+    menuRows = rows.map(function (r, i) {
+      var row = document.createElement('div');
+      row.className = 'inputRow';
+      row.textContent = r.label;
+      row.addEventListener('mouseover', function () { focusMenu(i); });
+      row.addEventListener('click', function () { runMenu(i); });
+      tileMenu.appendChild(row);
+      return row;
+    });
+    menuRows.forEach(function (row, i) { row.run = rows[i].run; });
+
+    // Below the tile, or above it near the bottom of the screen.
+    var r = items[focused].card.getBoundingClientRect();
+    tileMenu.style.left = Math.min(r.left, 1920 - 112 - 420) + 'px';
+    tileMenu.style.minWidth = '420px';
+    tileMenu.classList.remove('hidden');
+    var h = tileMenu.offsetHeight;
+    tileMenu.style.top = (r.bottom + 24 + h < 1060 ? r.bottom + 24 : Math.max(40, r.top - 24 - h)) + 'px';
+    zone = 'menu';
+    menuFocus = 0;
+    focusMenu(focusIndex || 0);
+  }
+
+  function focusMenu(i) {
+    if (menuRows[menuFocus]) menuRows[menuFocus].classList.remove('focused');
+    menuFocus = Math.max(0, Math.min(i, menuRows.length - 1));
+    menuRows[menuFocus].classList.add('focused');
+  }
+
+  function closeMenu() {
+    tileMenu.classList.add('hidden');
+    zone = 'grid';
+  }
+
+  function runMenu(i) {
+    var run = menuRows[i] && menuRows[i].run;
+    closeMenu();
+    if (run) run(); else focusTile(focused);
+  }
+
+  /** Rebuilds the tiles after one was hidden, shown or uninstalled, keeping the focus nearby. */
+  function rebuildTiles() {
+    var at = focused;
+    build();
+    animateIn();
+    focusTile(Math.min(at, items.length - 1));
+  }
+
+  function hideApp(app) {
+    var l = idList(HIDDEN_KEY);
+    if (l.indexOf(app.id) < 0) l.push(app.id);
+    store(HIDDEN_KEY, l);
+    rebuildTiles();
+    toast('Đã ẩn ' + app.title + ' · giữ OK trên một app để hiện lại');
+  }
+
+  function showHiddenMenu() {
+    var rows = idList(HIDDEN_KEY).map(function (id) {
+      return { label: titleOf(id), run: function () {
+        store(HIDDEN_KEY, idList(HIDDEN_KEY).filter(function (x) { return x !== id; }));
+        rebuildTiles();
+        toast('Đã hiện lại ' + titleOf(id));
+      } };
+    });
+    showMenu('Hiện lại app đã ẩn', rows, 0);
+  }
+
+  function confirmRemove(it) {
+    showMenu('Gỡ ' + it.app.title + ' khỏi TV?', [
+      { label: 'Gỡ cài đặt', run: function () { removeApp(it.app); } },
+      { label: 'Huỷ', run: function () { focusTile(focused); } }
+    ], 1);   // Huỷ first: uninstalling can't be undone from here
+  }
+
+  function removeApp(app) {
+    toast('Đang gỡ ' + app.title + '…');
+    focusTile(focused);
+    luna(SERVICE + 'removeApp', { id: app.id }, function (res) {
+      if (res.returnValue) {
+        var removed = load(REMOVED_KEY, true) || {};
+        removed[app.id] = Date.now();
+        store(REMOVED_KEY, removed);
+        rebuildTiles();
+        toast('Đã gỡ ' + app.title);
+      } else {
+        toast(res.errorText || 'Không gỡ được ' + app.title);
+      }
+    });
+  }
+
   // ---- rearranging ---------------------------------------------------------------------------
 
   /** Hold OK on a tile: it wiggles, the arrows move it, OK places it, Back puts everything back. */
@@ -498,7 +860,7 @@
     editing = { item: it, snapshot: items.slice() };
     it.el.classList.add('moving');
     document.body.classList.add('editing');
-    toast('Arrows to move  ·  OK to place  ·  Back to cancel');
+    toast('Mũi tên để di chuyển  ·  OK để đặt  ·  Back để huỷ');
   }
 
   function moveTo(to) {
@@ -557,6 +919,22 @@
       else if (k === KEY.OK) { var row = inputRows[inputFocus]; hideInputs(); launch(row.appId, row.label); }
       else if (k === KEY.BACK || k === KEY.ESC || k === KEY.LEFT || k === KEY.RIGHT) hideInputs();
       else return;
+    } else if (zone === 'menu') {
+      if (k === KEY.UP) focusMenu(menuFocus - 1);
+      else if (k === KEY.DOWN) focusMenu(menuFocus + 1);
+      else if (k === KEY.OK) runMenu(menuFocus);
+      else if (k === KEY.BACK || k === KEY.ESC || k === KEY.LEFT || k === KEY.RIGHT) { closeMenu(); focusTile(focused); }
+      else return;
+    } else if (zone === 'wall') {
+      var wcol = wpFocus % WP_COLUMNS, wlast = wpCards.length - 1;
+      if (k === KEY.LEFT) { if (wcol > 0) focusWallCard(wpFocus - 1); }
+      else if (k === KEY.RIGHT) { if (wcol < WP_COLUMNS - 1 && wpFocus < wlast) focusWallCard(wpFocus + 1); }
+      else if (k === KEY.UP) { if (wpFocus >= WP_COLUMNS) focusWallCard(wpFocus - WP_COLUMNS); }
+      else if (k === KEY.DOWN) {
+        if (Math.floor(wpFocus / WP_COLUMNS) < Math.floor(wlast / WP_COLUMNS)) focusWallCard(Math.min(wpFocus + WP_COLUMNS, wlast));
+      } else if (k === KEY.OK) { if (wpCards[wpFocus]) chooseWallpaper(wpCards[wpFocus].wp); }
+      else if (k === KEY.BACK || k === KEY.ESC) { closeWallPanel(); focusPill(2); }
+      else return;
     } else if (zone === 'top') {
       if (k === KEY.LEFT) focusPill(pillFocus - 1);
       else if (k === KEY.RIGHT) focusPill(pillFocus + 1);
@@ -574,7 +952,9 @@
       } else if (k === KEY.DOWN) {
         if (rowOf(focused) < rowOf(last)) focusTile(Math.min(focused + COLUMNS, last));
       } else if (k === KEY.OK) {
-        okTimer = setTimeout(function () { okTimer = null; startEdit(); }, LONG_PRESS_MS);
+        okTimer = setTimeout(function () { okTimer = null; openTileMenu(); }, LONG_PRESS_MS);
+      } else if (k === KEY.INFO || k === KEY.RED) {
+        openTileMenu();   // the same menu in one press, for remotes with these keys
       } else if (k === KEY.BACK) { /* home screen: Back goes nowhere */ }
       else return;
     }
@@ -582,7 +962,7 @@
   });
 
   pills.forEach(function (p, i) {
-    p.addEventListener('mouseover', function () { if (zone !== 'inputs') focusPill(i); });
+    p.addEventListener('mouseover', function () { if (zone !== 'inputs' && zone !== 'wall') focusPill(i); });
     p.addEventListener('click', function () { activatePill(i); });
   });
 
@@ -593,6 +973,9 @@
     if (editing) finishEdit(false);
     updateClock();
     if (zone === 'inputs') panel.classList.add('hidden');
+    if (zone === 'wall') closeWallPanel();
+    if (zone === 'menu') closeMenu();
+    applyWallpaper();   // a new day brings a new Bing picture
     pills.forEach(function (p) { p.classList.remove('focused'); });
     zone = 'none';
     animateIn();
@@ -603,6 +986,7 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden) resume(); });
 
   build();
+  applyWallpaper();
   updateClock();
   setInterval(updateClock, 10000);
   watchNetwork();

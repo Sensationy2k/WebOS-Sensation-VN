@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hình nền TV</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 48px;
+    background: #0c0c0e;
+    color: #f2f2f4;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  main { max-width: 480px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 26px; font-weight: 600; }
+  .sub { margin: 0 0 24px; color: #9a9aa2; }
+  section {
+    margin-bottom: 16px;
+    padding: 18px;
+    border-radius: 18px;
+    background: #1a1a1e;
+    border: 1px solid #2a2a30;
+  }
+  h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+  .hint { margin: 0 0 14px; color: #9a9aa2; font-size: 14px; }
+  button, .pick {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    border: 0;
+    border-radius: 12px;
+    background: #f2f2f4;
+    color: #0c0c0e;
+    font: inherit;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; }
+  input[type=file] { display: none; }
+  input[type=url] {
+    width: 100%;
+    margin-bottom: 10px;
+    padding: 13px 14px;
+    border-radius: 12px;
+    border: 1px solid #34343a;
+    background: #0c0c0e;
+    color: inherit;
+    font: inherit;
+  }
+  #preview { display: none; width: 100%; margin-top: 14px; border-radius: 12px; aspect-ratio: 16 / 9; object-fit: cover; }
+  #status { min-height: 24px; margin: 8px 2px 0; font-weight: 500; }
+  #status.ok { color: #5ad67d; }
+  #status.err { color: #ff6b6b; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Hình nền TV</h1>
+  <p class="sub">Ảnh gửi lên sẽ thành hình nền ngay, và được thêm vào trình bảo vệ màn hình.</p>
+
+  <section>
+    <h2>Ảnh trên điện thoại</h2>
+    <p class="hint">Trên Android, bấm "Chọn ảnh" rồi chọn Google Photos để lấy ảnh từ đó.</p>
+    <label class="pick" for="file">Chọn ảnh</label>
+    <input id="file" type="file" accept="image/*">
+    <img id="preview" alt="">
+  </section>
+
+  <section>
+    <h2>Link Google Photos hoặc link ảnh</h2>
+    <p class="hint">Trong Google Photos: mở ảnh, bấm Chia sẻ, chọn Tạo đường liên kết, rồi dán vào đây.</p>
+    <input id="link" type="url" placeholder="https://photos.app.goo.gl/…" autocomplete="off">
+    <button id="send">Gửi lên TV</button>
+  </section>
+
+  <p id="status"></p>
+</main>
+<script>
+  var W = 1920, H = 1080;
+  var statusEl = document.getElementById('status');
+
+  function status(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || '';
+  }
+
+  function post(path, body, type) {
+    return fetch(path, { method: 'POST', headers: { 'Content-Type': type }, body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (!j.ok) throw new Error(j.error || 'Lỗi'); });
+  }
+
+  /** The picture cropped to fill the screen, as a JPEG: phones take far bigger photos than a TV shows. */
+  function fitToScreen(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        var s = Math.max(W / img.naturalWidth, H / img.naturalHeight);
+        var sw = W / s, sh = H / s;
+        var c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        c.getContext('2d').drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, 0, 0, W, H);
+        URL.revokeObjectURL(img.src);
+        c.toBlob(function (b) { b ? resolve(b) : reject(new Error('Không đọc được ảnh')); }, 'image/jpeg', 0.88);
+      };
+      img.onerror = function () { reject(new Error('Không đọc được ảnh này')); };
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  document.getElementById('file').addEventListener('change', function () {
+    var file = this.files[0];
+    this.value = '';
+    if (!file) return;
+    status('Đang gửi…');
+    fitToScreen(file).then(function (blob) {
+      var p = document.getElementById('preview');
+      p.src = URL.createObjectURL(blob);
+      p.style.display = 'block';
+      return post('/upload', blob, 'image/jpeg');
+    }).then(function () { status('Đã đổi hình nền trên TV', 'ok'); })
+      .catch(function (e) { status(e.message === 'Failed to fetch' ? 'Mất kết nối với TV: mở lại bảng Hình nền trên TV' : e.message, 'err'); });
+  });
+
+  document.getElementById('send').addEventListener('click', function () {
+    var btn = this, url = document.getElementById('link').value.trim();
+    if (!url) { status('Dán link vào trước đã', 'err'); return; }
+    btn.disabled = true;
+    status('TV đang tải ảnh…');
+    post('/link', JSON.stringify({ url: url }), 'application/json')
+      .then(function () { status('Đã đổi hình nền trên TV', 'ok'); })
+      .catch(function (e) { status(e.message === 'Failed to fetch' ? 'Mất kết nối với TV: mở lại bảng Hình nền trên TV' : e.message, 'err'); })
+      .then(function () { btn.disabled = false; });
+  });
+</script>
+</body>
+</html>

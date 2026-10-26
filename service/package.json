@@ -1,0 +1,6 @@
+{
+  "name": "com.gathin.tvhome.service",
+  "version": "1.0.0",
+  "description": "Wallpaper helper for the launcher: phone uploads and Bing pictures",
+  "main": "service.js"
+}
