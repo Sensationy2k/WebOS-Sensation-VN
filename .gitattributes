@@ -1,0 +1,5 @@
+# The scripts and QML are copied to the TV as they are: keep Unix line endings everywhere.
+* text=auto eol=lf
+*.jpg binary
+*.png binary
+*.ttf binary
