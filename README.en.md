@@ -129,7 +129,7 @@ TV_HOST=192.168.1.50 TV_SSH_KEY=~/.ssh/tvkey ./install-root.sh
 `TV_SSH_KEY` also lets `sync-apps.py` fetch the 192px icons that only exist on the TV's disk.
 
 Add `HOME_WATCH=1` to run the Home button watcher on the TV itself instead of another device:
-[`home-watch-tv.sh`](home-watch-tv.sh) goes into Homebrew Channel's `init.d`, so it starts at
+[`service/tv/home-watch.sh`](service/tv/home-watch.sh) goes into Homebrew Channel's `init.d`, so it starts at
 every boot. Unlike `home-watch.py`, Home always comes back to the launcher: LG's home sometimes
 takes the screen back a second after the switch, which made "press Home twice" misfire, and the
 TV doesn't let anything but its compositor read the remote. For LG's home and its menus, use the
@@ -139,8 +139,8 @@ Live TV or an HDMI input (with no signal those show LG's own slideshow), and log
 the TV and run `pkill -f tvhome-homewatch`.
 
 Add `SCREENSAVER=1` to replace LG's screensaver (and its ads) with a slideshow of Bing's pictures
-and every picture sent from a phone, with a clock: [`screensaver/main.qml`](screensaver/main.qml),
-bind-mounted over LG's at boot by [`screensaver-tv.sh`](screensaver-tv.sh). Phone pictures are
+and every picture sent from a phone, with a clock: [`service/tv/screensaver.qml`](service/tv/screensaver.qml),
+bind-mounted over LG's at boot by [`service/tv/screensaver.sh`](service/tv/screensaver.sh). Phone pictures are
 kept in `/media/internal/tvhome-photos` (the latest 60). Try it with
 `luna-send -n 1 luna://com.webos.service.tvpower/power/turnOnScreenSaver '{}'`. To remove it,
 delete `/var/lib/webosbrew/init.d/tvhome-screensaver` on the TV and reboot.
@@ -179,8 +179,8 @@ For when you do land on it. Names vary a little by webOS version:
 | [`sync-apps.py`](sync-apps.py) | Reads apps, icons and HDMI inputs from the TV into `app/apps.js` and `app/icons/` |
 | [`home-watch.py`](home-watch.py) | Sends the Home button to the launcher |
 | [`home-watch-mac.sh`](home-watch-mac.sh) | Runs the watcher as a macOS background service |
-| [`home-watch-tv.sh`](home-watch-tv.sh) | The watcher on a rooted TV itself, started at boot |
-| [`no-assistant-tv.sh`](no-assistant-tv.sh) | Keeps Google Assistant out of memory on a rooted TV |
+| [`service/tv/home-watch.sh`](service/tv/home-watch.sh) | The watcher on a rooted TV itself, started at boot |
+| [`service/tv/no-assistant.sh`](service/tv/no-assistant.sh) | Keeps Google Assistant out of memory on a rooted TV |
 | [`lgtv.py`](lgtv.py) | Pairs with and talks to the TV's remote-control service |
 | [`assets/icon.jpg`](assets/icon.jpg) | The app icon, resized to PNG by `install.sh` |
 
