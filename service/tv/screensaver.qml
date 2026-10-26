@@ -2,7 +2,7 @@
  * Slideshow screensaver: Bing's pictures of the day and the pictures sent from a phone through the
  * launcher's wallpaper panel (kept in PHOTO_DIR by service/service.js), in random order, with a clock.
  *
- * It replaces LG's screensaver on a rooted TV (screensaver-tv.sh bind-mounts it at boot):
+ * It replaces LG's screensaver on a rooted TV (screensaver.sh bind-mounts it at boot):
  *   mount --bind main.qml /usr/palm/applications/com.webos.app.screensaver/qml/main.qml
  * Try it:
  *   luna-send -n 1 luna://com.webos.service.tvpower/power/turnOnScreenSaver '{}'

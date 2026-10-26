@@ -1,0 +1,15 @@
+{
+  "id": "com.gathin.tvhome",
+  "version": "1.2.0",
+  "type": "web",
+  "title": "WebOS Sensation VN",
+  "appDescription": "Màn hình chính kiểu Apple TV: hình nền Bing và ảnh từ điện thoại, gỡ và sắp xếp app, nút Home luôn về launcher, trình bảo vệ màn hình.",
+  "iconUri": "https://sensationy2k.github.io/WebOS-Sensation-VN/icon.png",
+  "sourceUrl": "https://github.com/Sensationy2k/WebOS-Sensation-VN",
+  "rootRequired": "optional",
+  "ipkUrl": "https://github.com/Sensationy2k/WebOS-Sensation-VN/releases/download/v1.2.0/com.gathin.tvhome_1.2.0_all.ipk",
+  "ipkHash": {
+    "sha256": "225f428138d85b49bc0f88801fff71e92843a07f44e96bec1f3e2a0f13e41eef"
+  },
+  "ipkSize": 104212
+}

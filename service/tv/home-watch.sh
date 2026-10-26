@@ -1,10 +1,8 @@
 #!/bin/sh
 # home-watch.py for a rooted TV, running on the TV itself: no other device needed.
-# Homebrew Channel runs /var/lib/webosbrew/init.d at boot, so install it there (install-root.sh
-# does, with HOME_WATCH=1):
-#   scp home-watch-tv.sh root@TV:/var/lib/webosbrew/init.d/tvhome-homewatch
-#   ssh root@TV 'chmod +x /var/lib/webosbrew/init.d/tvhome-homewatch && /var/lib/webosbrew/init.d/tvhome-homewatch'
-# Remove that file (and reboot, or pkill -f tvhome-homewatch) to give Home back to LG.
+# The service puts it in /var/lib/webosbrew/init.d (run by Homebrew Channel at boot) as
+# tvhome-homewatch when "Home always opens the launcher" is turned on in the launcher, and removes
+# it (pkill -f tvhome-homewatch) when it is turned off.
 #
 # Home always comes back to the launcher. For LG's home and its menus, use the launcher's LG home
 # button: it leaves a fresh $LG_HOME_FLAG (through the service), and the watcher then lets LG's

@@ -454,7 +454,19 @@
     else if (i === 1) launch('com.palm.app.settings', 'Settings', { target: 'network' });
     else if (i === 2) showWallPanel();
     else if (i === 3) openLgHome();
-    else launch('com.palm.app.settings', 'Settings');
+    else showSettingsMenu();
+  }
+
+  function showSettingsMenu() {
+    showMenu('Cài đặt', [
+      { label: 'Cài đặt TV', run: function () { leaveMenu(); launch('com.palm.app.settings', 'Settings'); } },
+      { label: 'Tính năng nâng cao', run: showFeaturesMenu },
+      { label: 'Làm mới danh sách app', run: function () {
+        leaveMenu();
+        toast('Đang đọc danh sách app…');
+        refreshApps(function (ok) { toast(ok ? 'Đã làm mới danh sách app' : 'Không đọc được danh sách app'); });
+      } }
+    ], 0, pills.length - 1);
   }
 
   /**
@@ -717,7 +729,7 @@
   // from the tiles until the next sync-apps.py, which no longer lists them (or lists them again
   // when they were reinstalled).
   var HIDDEN_KEY = 'tvhome.hidden', REMOVED_KEY = 'tvhome.removed';
-  var menuRows = [], menuFocus = 0;
+  var menuRows = [], menuFocus = 0, menuPill = -1;   // menuPill: the pill a menu hangs under
 
   function idList(key) {
     var l = load(key, true);
@@ -755,7 +767,8 @@
   }
 
   /** A small menu beside the focused tile; OK runs a row, Back closes. */
-  function showMenu(title, rows, focusIndex) {
+  function showMenu(title, rows, focusIndex, pillIndex) {
+    menuPill = pillIndex === undefined ? -1 : pillIndex;
     tileMenu.innerHTML = '';
     var t = document.createElement('div');
     t.className = 'menuTitle';
@@ -770,11 +783,11 @@
       tileMenu.appendChild(row);
       return row;
     });
-    menuRows.forEach(function (row, i) { row.run = rows[i].run; });
+    menuRows.forEach(function (row, i) { row.run = rows[i].run; row.keep = rows[i].keep; });
 
-    // Below the tile, or above it near the bottom of the screen.
-    var r = items[focused].card.getBoundingClientRect();
-    tileMenu.style.left = Math.min(r.left, 1920 - 112 - 420) + 'px';
+    // Below the tile or pill, or above it near the bottom of the screen.
+    var r = (menuPill >= 0 ? pills[menuPill] : items[focused].card).getBoundingClientRect();
+    tileMenu.style.left = Math.min(r.left, 1920 - 112 - 560) + 'px';
     tileMenu.style.minWidth = '420px';
     tileMenu.classList.remove('hidden');
     var h = tileMenu.offsetHeight;
@@ -795,10 +808,22 @@
     zone = 'grid';
   }
 
-  function runMenu(i) {
-    var run = menuRows[i] && menuRows[i].run;
+  /** Closes the menu and puts the focus back where it was opened from. */
+  function leaveMenu() {
     closeMenu();
-    if (run) run(); else focusTile(focused);
+    if (menuPill >= 0) { zone = 'none'; focusPill(menuPill); }
+    else focusTile(focused);
+  }
+
+  var menuBusy = false;   // a row is waiting for the service: the menu stays and ignores OK
+
+  function runMenu(i) {
+    var row = menuRows[i], run = row && row.run;
+    if (menuBusy) return;
+    if (!run) { leaveMenu(); return; }
+    if (row.keep) { run(row); return; }   // e.g. a switch: the menu stays open
+    closeMenu();
+    run();
   }
 
   /** Rebuilds the tiles after one was hidden, shown or uninstalled, keeping the focus nearby. */
@@ -848,6 +873,130 @@
       } else {
         toast(res.errorText || 'Không gỡ được ' + app.title);
       }
+    });
+  }
+
+  // ---- on the TV itself: root, the app list, advanced features ------------------------------
+
+  /*
+   * Installed from Homebrew Channel, nothing has run on a computer: the bundled service gets root
+   * through Homebrew Channel's elevateService (again after every update, which resets it), then
+   * reads the TV's apps and turns the advanced features on and off. Without root (Developer Mode,
+   * or no Homebrew Channel) the launcher uses apps.js from sync-apps.py as before.
+   */
+  var VERSION = '1.2.0';   // as in appinfo.json: features get this version's scripts once
+  var HBC = 'luna://org.webosbrew.hbchannel.service/';
+  var APPS_KEY = 'tvhome.apps', ICONS_KEY = 'tvhome.icons', FEATURES_VERSION_KEY = 'tvhome.featuresVersion';
+  var serviceRoot = false, features = {};
+  var FEATURE_LIST = [
+    { name: 'homeWatch', label: 'Nút Home luôn mở launcher' },
+    { name: 'screensaver', label: 'Trình bảo vệ màn hình Bing và ảnh' },
+    { name: 'noAssistant', label: 'Không giữ Google Assistant trong RAM' }
+  ];
+
+  function readStatus(cb) {
+    luna(SERVICE + 'status', {}, function (res) {
+      serviceRoot = !!res.root;
+      features = res.features || {};
+      cb(res);
+    });
+  }
+
+  /** cb(true) once the service runs as root. */
+  function ensureRoot(cb) {
+    readStatus(function (res) {
+      if (serviceRoot) { cb(true); return; }
+      if (!('root' in res)) { cb(false); return; }   // no service: not on a TV
+      toast('Đang thiết lập lần đầu…');   // Homebrew Channel can take half a minute
+      luna(HBC + 'elevateService', { id: 'com.gathin.tvhome.service' }, function (el) {
+        if (!el.returnValue) { cb(false); return; }   // no Homebrew Channel, or it has no root
+        // The service that answered is still the unprivileged one: restart it as root.
+        luna(HBC + 'exec', { command: 'pkill -f "com.gathin.tvhome[.]service"' }, function () {
+          setTimeout(function () { readStatus(function () { cb(serviceRoot); }); }, 1500);
+        });
+      });
+    });
+  }
+
+  /** The cached list from the TV, so tiles show at once; apps.js (sync-apps.py) otherwise. */
+  function loadCachedApps() {
+    var cached = load(APPS_KEY, true), icons = load(ICONS_KEY, true) || {};
+    if (!cached || !cached.apps) return;
+    cached.apps.forEach(function (a) { a.icon = icons[a.iconKey] || ''; });
+    window.TV_APPS = cached;
+  }
+
+  /** The TV's apps from the service, icons as data: URLs (only new or changed icons are read). */
+  function refreshApps(done) {
+    if (!serviceRoot) { if (done) done(false); return; }
+    luna(SERVICE + 'apps', {}, function (res) {
+      if (!res.returnValue || !res.apps) { if (done) done(false); return; }
+      var cache = load(ICONS_KEY, true) || {}, icons = {}, pending = res.apps.length;
+      function finished() {
+        var old = window.TV_APPS || {};
+        var inputs = res.inputs && res.inputs.length ? res.inputs : (old.inputs || []);
+        var list = res.apps.filter(function (a) { return icons[a.iconKey]; });
+        store(APPS_KEY, { apps: list.map(function (a) {
+          return { id: a.id, title: a.title, iconKey: a.iconKey, iconColor: a.iconColor };
+        }), inputs: inputs, synced: res.synced });
+        store(ICONS_KEY, icons);   // may not fit: the next start reads the icons again
+        list.forEach(function (a) { a.icon = icons[a.iconKey]; });
+        var changed = signature(list) !== signature(old.apps || []);
+        window.TV_APPS = { apps: list, inputs: inputs, synced: res.synced };
+        if (changed && zone !== 'menu' && zone !== 'wall' && !editing) rebuildTiles();
+        if (done) done(true);
+      }
+      if (!pending) { finished(); return; }
+      res.apps.forEach(function (a) {
+        if (cache[a.iconKey]) { icons[a.iconKey] = cache[a.iconKey]; if (!--pending) finished(); return; }
+        if (!a.icon) { if (!--pending) finished(); return; }
+        luna(SERVICE + 'icon', { file: a.icon }, function (r) {
+          if (r.returnValue && r.data) icons[a.iconKey] = r.data;
+          if (!--pending) finished();
+        });
+      });
+    });
+  }
+
+  function signature(apps) {
+    return apps.map(function (a) { return a.id + '|' + a.title + '|' + (a.iconKey || a.icon); }).join('\n');
+  }
+
+  /** After an update, the features that are on get the new scripts. */
+  function refreshFeaturesOnce() {
+    if (load(FEATURES_VERSION_KEY) === VERSION) return;
+    luna(SERVICE + 'refreshFeatures', {}, function (res) {
+      if (res.returnValue) { features = res.features || features; store(FEATURES_VERSION_KEY, VERSION); }
+    });
+  }
+
+  function showFeaturesMenu(focusIndex) {
+    if (!serviceRoot) {
+      showMenu('Tính năng nâng cao', [
+        { label: 'Cần TV đã root bằng Homebrew Channel', run: null }
+      ], 0, pills.length - 1);
+      return;
+    }
+    showMenu('Tính năng nâng cao', FEATURE_LIST.map(function (f, i) {
+      return { label: (features[f.name] ? 'Bật' : 'Tắt') + '  ·  ' + f.label, keep: true,
+               run: function (row) { toggleFeature(f, i, row); } };
+    }), focusIndex || 0, pills.length - 1);
+  }
+
+  function toggleFeature(f, i, row) {
+    var on = !features[f.name];
+    menuBusy = true;
+    row.textContent = 'Đang đổi…  ·  ' + f.label;
+    luna(SERVICE + 'setFeature', { name: f.name, on: on }, function (res) {
+      menuBusy = false;
+      if (!res.returnValue) {
+        toast(res.errorText || 'Không đổi được');
+      } else {
+        features = res.features || features;
+        var note = !on && f.name === 'noAssistant' ? ' · khởi động lại TV để có lại' : '';
+        toast((on ? 'Đã bật: ' : 'Đã tắt: ') + f.label + note);
+      }
+      if (zone === 'menu') showFeaturesMenu(i);   // still open: show the new state
     });
   }
 
@@ -923,7 +1072,7 @@
       if (k === KEY.UP) focusMenu(menuFocus - 1);
       else if (k === KEY.DOWN) focusMenu(menuFocus + 1);
       else if (k === KEY.OK) runMenu(menuFocus);
-      else if (k === KEY.BACK || k === KEY.ESC || k === KEY.LEFT || k === KEY.RIGHT) { closeMenu(); focusTile(focused); }
+      else if (k === KEY.BACK || k === KEY.ESC || k === KEY.LEFT || k === KEY.RIGHT) leaveMenu();
       else return;
     } else if (zone === 'wall') {
       var wcol = wpFocus % WP_COLUMNS, wlast = wpCards.length - 1;
@@ -980,13 +1129,20 @@
     zone = 'none';
     animateIn();
     focusTile(focused);
+    refreshApps();   // apps installed or removed elsewhere meanwhile
   }
 
   document.addEventListener('webOSRelaunch', resume);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) resume(); });
 
+  loadCachedApps();
   build();
   applyWallpaper();
+  ensureRoot(function (root) {
+    if (!root) return;
+    refreshApps();
+    refreshFeaturesOnce();
+  });
   updateClock();
   setInterval(updateClock, 10000);
   watchNetwork();

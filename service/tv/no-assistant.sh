@@ -2,7 +2,8 @@
 # Keeps Google Assistant from sitting in memory on a rooted TV: LG's preloadmanager keeps it
 # loaded (pinned) for a quick answer. At boot this takes it off the preload list and closes it.
 # The change lives in configd's memory only, nothing on disk: remove this file from
-# /var/lib/webosbrew/init.d and reboot to undo. install-root.sh puts it there with NO_ASSISTANT=1.
+# /var/lib/webosbrew/init.d and reboot to undo. The service puts it there (tvhome-noassistant) when
+# the option is turned on in the launcher.
 APPS="google.assistant"   # app ids to stop preloading
 KEY=com.webos.service.preloadmanager.supportAppList
 

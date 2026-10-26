@@ -16,7 +16,7 @@ var service = new Service('com.gathin.tvhome.service');
 var PORT = 8099;
 var MAX_BYTES = 8 * 1024 * 1024;   // the launcher keeps pictures in localStorage: phones send ~0.5 MB
 var PAGE = fs.readFileSync(path.join(__dirname, 'upload.html'));
-// Every picture a phone sends is also kept here for the screensaver (screensaver/main.qml).
+// Every picture a phone sends is also kept here for the screensaver (tv/screensaver.qml).
 var PHOTO_DIR = '/media/internal/tvhome-photos';   // the service's jail can write here
 var MAX_PHOTOS = 60;
 var EXTENSIONS = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' };
@@ -175,7 +175,7 @@ service.register('share', function (msg) {
   if (!watchers.length) stopServer();   // the panel closed: don't leave the page up
 });
 
-// The launcher's LG home button: the Home watcher (home-watch-tv.sh) leaves LG's home alone when
+// The launcher's LG home button: the Home watcher (tv/home-watch.sh) leaves LG's home alone when
 // this file is fresh. The watcher runs as root outside the service's jail; /media/internal is shared.
 var LG_HOME_FLAG = '/media/internal/.tvhome-lghome';
 
@@ -217,6 +217,7 @@ service.register('bing', function (msg) {
 var DEV_APPS = '/media/developer/apps/usr/palm/applications/';
 
 service.register('removeApp', function (msg) {
+  if (needRoot(msg)) return;
   var id = (msg.payload && msg.payload.id) || '';
   if (!/^[\w.-]+$/.test(id) || id === 'com.gathin.tvhome') {
     msg.respond({ returnValue: false, errorText: 'Không gỡ được ứng dụng này' });
@@ -241,4 +242,146 @@ service.register('removeApp', function (msg) {
     }
   });
   timer = setTimeout(function () { finish(false, 'Hết thời gian chờ'); }, 60000);
+});
+
+// ---- running as root (Homebrew Channel's elevateService): apps, icons, advanced features ----
+
+var child_process = require('child_process');
+
+function isRoot() { return typeof process.getuid === 'function' && process.getuid() === 0; }
+
+function lunaCall(uri, params) {
+  return new Promise(function (resolve) {
+    service.call(uri, params || {}, function (m) { resolve(m.payload || {}); });
+  });
+}
+
+// Root methods answer only the launcher, and luna-send from a root shell (install-root.sh):
+// another app on the TV must not uninstall apps or change boot scripts through this service.
+function callerOf(msg) {
+  return String(msg.sender || (msg.message && msg.message.senderAppID && msg.message.senderAppID()) || '');
+}
+
+function needRoot(msg) {
+  var caller = callerOf(msg);
+  if (!/^(com\.gathin\.tvhome|com\.webos\.lunasend)(-\d+)?$/.test(caller)) {   // exactly these, maybe with a -pid
+    msg.respond({ returnValue: false, errorCode: 'DENIED', errorText: 'not allowed for ' + (caller || 'unknown caller') });
+    return true;
+  }
+  if (isRoot()) return false;
+  msg.respond({ returnValue: false, errorCode: 'NOT_ROOT', errorText: 'Dịch vụ chưa có quyền root' });
+  return true;
+}
+
+// The best icon a launch point has on disk: LG's own list only gives apps a 130px one.
+function iconFile(p) {
+  var c = [p.extraLargeIcon, p.largeIcon, p.mediumLargeIcon, p.icon];
+  for (var i = 0; i < c.length; i++) {
+    if (c[i] && c[i].charAt(0) === '/' && fs.existsSync(c[i])) return c[i];
+  }
+  return '';
+}
+
+/** The TV's apps, as sync-apps.py would write them into apps.js (icons come from icon()). */
+service.register('apps', function (msg) {
+  if (needRoot(msg)) return;
+  Promise.all([
+    lunaCall('luna://com.webos.applicationManager/listLaunchPoints', {}),
+    lunaCall('luna://com.webos.service.eim/getAllInputStatus', {})
+  ]).then(function (r) {
+    var apps = (r[0].launchPoints || []).filter(function (p) {
+      return !p.hidden && p.id !== 'com.gathin.tvhome';
+    }).map(function (p) {
+      var f = iconFile(p), mtime = 0;
+      try { mtime = fs.statSync(f).mtime.getTime(); } catch (e) { /* no icon on disk */ }
+      return { id: p.id, title: p.title, icon: f, iconKey: f + '@' + mtime, iconColor: p.iconColor || p.bgColor || '' };
+    });
+    var inputs = (r[1].devices || []).filter(function (d) { return d.appId; }).map(function (d) {
+      return { appId: d.appId, label: d.label || d.id };
+    });
+    msg.respond({ returnValue: true, apps: apps, inputs: inputs, synced: Date.now() });
+  }).catch(function (e) {
+    msg.respond({ returnValue: false, errorText: e.message });
+  });
+});
+
+var ICON_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+
+/** One icon file as a data: URL: a canvas reading it isn't tainted, so the launcher gets its colours. */
+service.register('icon', function (msg) {
+  if (needRoot(msg)) return;
+  var f = (msg.payload && msg.payload.file) || '';
+  var type = ICON_TYPES[path.extname(f).toLowerCase()];
+  if (!type || f.indexOf('..') >= 0 || !/\/(icon|launcher|assets|resources|applications)/i.test(f)) {
+    msg.respond({ returnValue: false, errorText: 'not an icon' });
+    return;
+  }
+  fs.readFile(f, function (err, data) {
+    if (err) msg.respond({ returnValue: false, errorText: err.message });
+    else msg.respond({ returnValue: true, data: 'data:' + type + ';base64,' + data.toString('base64') });
+  });
+});
+
+// Advanced features: scripts in tv/ that Homebrew Channel runs from init.d at every boot.
+var INIT_D = '/var/lib/webosbrew/init.d/';
+var SCREENSAVER_QML = '/media/developer/tvhome-screensaver/main.qml';
+var LG_SCREENSAVER = '/usr/palm/applications/com.webos.app.screensaver/qml/main.qml';
+var FEATURES = {
+  homeWatch: { script: 'home-watch.sh', file: 'tvhome-homewatch', off: 'pkill -f "tvhome-homewatch[ ]run"' },
+  screensaver: { script: 'screensaver.sh', file: 'tvhome-screensaver', off: 'umount ' + LG_SCREENSAVER },
+  noAssistant: { script: 'no-assistant.sh', file: 'tvhome-noassistant', off: '' }   // back after a reboot
+};
+
+function featureStates() {
+  var s = {};
+  Object.keys(FEATURES).forEach(function (k) { s[k] = fs.existsSync(INIT_D + FEATURES[k].file); });
+  return s;
+}
+
+/** Puts a feature's script in init.d and runs it now (the scripts restart themselves if running). */
+function enableFeature(name) {
+  var f = FEATURES[name], dest = INIT_D + f.file;
+  fs.mkdirSync(INIT_D, { recursive: true });
+  if (name === 'screensaver') {
+    fs.mkdirSync(path.dirname(SCREENSAVER_QML), { recursive: true });
+    // Written in place: the bind mount follows the file, so an update is live at once.
+    fs.writeFileSync(SCREENSAVER_QML, fs.readFileSync(path.join(__dirname, 'tv', 'screensaver.qml')));
+  }
+  fs.writeFileSync(dest, fs.readFileSync(path.join(__dirname, 'tv', f.script)));
+  fs.chmodSync(dest, 493);   // 0755
+  child_process.spawn('/bin/sh', [dest], { detached: true, stdio: 'ignore' }).unref();
+}
+
+function disableFeature(name) {
+  var f = FEATURES[name];
+  try { fs.unlinkSync(INIT_D + f.file); } catch (e) { /* already off */ }
+  if (f.off) child_process.exec(f.off, function () {});
+}
+
+service.register('status', function (msg) {
+  msg.respond({ returnValue: true, root: isRoot(), features: featureStates() });
+});
+
+service.register('setFeature', function (msg) {
+  if (needRoot(msg)) return;
+  var p = msg.payload || {};
+  if (!FEATURES[p.name]) { msg.respond({ returnValue: false, errorText: 'unknown feature' }); return; }
+  try {
+    if (p.on) enableFeature(p.name); else disableFeature(p.name);
+    msg.respond({ returnValue: true, features: featureStates() });
+  } catch (e) {
+    msg.respond({ returnValue: false, errorText: e.message });
+  }
+});
+
+/** After an update: the features that are on get this version's scripts. */
+service.register('refreshFeatures', function (msg) {
+  if (needRoot(msg)) return;
+  var on = featureStates();
+  try {
+    Object.keys(on).forEach(function (k) { if (on[k]) enableFeature(k); });
+    msg.respond({ returnValue: true, features: on });
+  } catch (e) {
+    msg.respond({ returnValue: false, errorText: e.message });
+  }
 });
