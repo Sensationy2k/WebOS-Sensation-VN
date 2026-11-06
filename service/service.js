@@ -15,6 +15,18 @@ var Service = require('webos-service');
 var service = new Service('com.gathin.tvhome.service');
 var PORT = 8099;
 var MAX_BYTES = 8 * 1024 * 1024;   // the launcher keeps pictures in localStorage: phones send ~0.5 MB
+var MAX_MUSIC_BYTES = 40 * 1024 * 1024;   // one song
+
+// Songs sent from a phone, and the screensaver's music choice (read by tv/screensaver.qml).
+var MUSIC_DIR = '/media/internal/tvhome-music';
+var MUSIC_JSON = '/media/internal/tvhome-music.json';
+var MAX_SONGS = 50;
+// The screensaver's own settings (read by tv/screensaver.qml): {"zoomSpeed": 1 | 1.5 | 2}.
+var SCREENSAVER_JSON = '/media/internal/tvhome-screensaver.json';
+var ZOOM_SPEEDS = [1, 1.5, 2];
+var AUDIO_TYPES = { 'audio/mpeg': '.mp3', 'audio/mp3': '.mp3', 'audio/mp4': '.m4a', 'audio/x-m4a': '.m4a',
+                    'audio/aac': '.aac', 'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav',
+                    'audio/flac': '.flac' };
 var PAGE = fs.readFileSync(path.join(__dirname, 'upload.html'));
 // Every picture a phone sends is also kept here for the screensaver (tv/screensaver.qml).
 var PHOTO_DIR = '/media/internal/tvhome-photos';   // the service's jail can write here
@@ -78,12 +90,13 @@ function fromLink(link) {
   });
 }
 
-function readBody(req) {
+function readBody(req, limit) {
+  limit = limit || MAX_BYTES;
   return new Promise(function (resolve, reject) {
     var chunks = [], size = 0;
     req.on('data', function (c) {
       size += c.length;
-      if (size > MAX_BYTES) { reject(new Error('Ảnh quá lớn')); req.destroy(); return; }
+      if (size > limit) { reject(new Error('Tệp quá lớn')); req.destroy(); return; }
       chunks.push(c);
     });
     req.on('end', function () { resolve(Buffer.concat(chunks)); });
@@ -132,6 +145,13 @@ function handle(req, res) {
       var type = req.headers['content-type'] || '';
       if (!/^image\//.test(type) || !body.length) throw new Error('Tệp không phải ảnh');
       setLatest(type, body);
+      reply(res, 200, { ok: true });
+    }).catch(function (e) { reply(res, 400, { ok: false, error: e.message }); });
+  } else if (req.method === 'POST' && url === '/music') {
+    readBody(req, MAX_MUSIC_BYTES).then(function (body) {
+      var type = (req.headers['content-type'] || '').split(';')[0];
+      var name = decodeURIComponent(req.headers['x-file-name'] || 'song');
+      keepSong(type, name, body);
       reply(res, 200, { ok: true });
     }).catch(function (e) { reply(res, 400, { ok: false, error: e.message }); });
   } else if (req.method === 'POST' && url === '/link') {
@@ -186,6 +206,77 @@ service.register('allowLgHome', function (msg) {
   } catch (e) {
     msg.respond({ returnValue: false, errorText: e.message });
   }
+});
+
+/** Saves a song from a phone as <time>-<its name>, dropping the oldest beyond MAX_SONGS. */
+function keepSong(type, name, body) {
+  var ext = AUDIO_TYPES[type] || path.extname(name).toLowerCase();
+  if (!/^\.(mp3|m4a|aac|ogg|wav|flac)$/.test(ext) || !body.length) throw new Error('Tệp không phải nhạc');
+  var base = path.basename(name, path.extname(name)).replace(/[^\w\u00C0-\u1EF9 .()-]+/g, '_').slice(0, 80) || 'song';
+  fs.mkdirSync(MUSIC_DIR, { recursive: true });
+  fs.writeFileSync(path.join(MUSIC_DIR, Date.now() + '-' + base + ext), body);
+  var names = fs.readdirSync(MUSIC_DIR).sort();   // names start with the time: oldest first
+  names.slice(0, Math.max(0, names.length - MAX_SONGS)).forEach(function (n) {
+    fs.unlinkSync(path.join(MUSIC_DIR, n));
+  });
+}
+
+function songs() {
+  try { return fs.readdirSync(MUSIC_DIR).sort(); } catch (e) { return []; }
+}
+
+/** The screensaver's music: {mode: 'off' | 'radio' | 'phone', url, title}, and the phone songs. */
+service.register('music', function (msg) {
+  var config = { mode: 'off' };
+  try { config = JSON.parse(fs.readFileSync(MUSIC_JSON, 'utf8')); } catch (e) { /* never chosen */ }
+  msg.respond({ returnValue: true, config: config, songs: songs().map(function (n) { return n.replace(/^\d+-/, ''); }) });
+});
+
+service.register('setMusic', function (msg) {
+  var p = msg.payload || {}, config = { mode: p.mode };
+  if (p.mode === 'radio') {
+    // http too: LG's media pipeline can't open https streams.
+    if (!/^https?:\/\/[\w.-]+\//.test(p.url || '')) { msg.respond({ returnValue: false, errorText: 'bad url' }); return; }
+    config.url = p.url;
+    config.title = String(p.title || '');
+  } else if (p.mode !== 'phone' && p.mode !== 'off') {
+    msg.respond({ returnValue: false, errorText: 'bad mode' });
+    return;
+  }
+  try {
+    fs.writeFileSync(MUSIC_JSON, JSON.stringify(config));
+    msg.respond({ returnValue: true, config: config });
+  } catch (e) {
+    msg.respond({ returnValue: false, errorText: e.message });
+  }
+});
+
+service.register('screensaver', function (msg) {
+  var config = {};
+  try { config = JSON.parse(fs.readFileSync(SCREENSAVER_JSON, 'utf8')); } catch (e) { /* never set */ }
+  msg.respond({ returnValue: true, config: config });
+});
+
+service.register('setScreensaver', function (msg) {
+  var speed = (msg.payload || {}).zoomSpeed;
+  if (ZOOM_SPEEDS.indexOf(speed) === -1) { msg.respond({ returnValue: false, errorText: 'bad zoomSpeed' }); return; }
+  try {
+    fs.writeFileSync(SCREENSAVER_JSON, JSON.stringify({ zoomSpeed: speed }));
+    msg.respond({ returnValue: true, config: { zoomSpeed: speed } });
+  } catch (e) {
+    msg.respond({ returnValue: false, errorText: e.message });
+  }
+});
+
+/** Starts the screensaver now. tvpowerd only takes this from system callers: luna-send, as root. */
+service.register('startScreensaver', function (msg) {
+  if (needRoot(msg)) return;
+  // luna-send does nothing without a terminal on this firmware.
+  child_process.exec('script -q -c "luna-send -n 1 luna://com.webos.service.tvpower/power/turnOnScreenSaver {}" /dev/null',
+    function (err, out) {
+      if (err || !/"returnValue": *true/.test(out)) msg.respond({ returnValue: false, errorText: (err && err.message) || out });
+      else msg.respond({ returnValue: true });
+    });
 });
 
 service.register('bing', function (msg) {
@@ -326,8 +417,9 @@ service.register('icon', function (msg) {
 var INIT_D = '/var/lib/webosbrew/init.d/';
 var SCREENSAVER_QML = '/media/developer/tvhome-screensaver/main.qml';
 var LG_SCREENSAVER = '/usr/palm/applications/com.webos.app.screensaver/qml/main.qml';
+var HOME_KEY_FILTER = '/media/developer/tvhome-homekey.js';   // tv/home-key.js, for home-watch.sh
 var FEATURES = {
-  homeWatch: { script: 'home-watch.sh', file: 'tvhome-homewatch', off: 'pkill -f "tvhome-homewatch[ ]run"' },
+  homeWatch: { script: 'home-watch.sh', file: 'tvhome-homewatch', off: '/bin/sh ' + path.join(__dirname, 'tv', 'home-watch.sh') + ' off' },
   screensaver: { script: 'screensaver.sh', file: 'tvhome-screensaver', off: 'umount ' + LG_SCREENSAVER },
   noAssistant: { script: 'no-assistant.sh', file: 'tvhome-noassistant', off: '' }   // back after a reboot
 };
@@ -346,6 +438,10 @@ function enableFeature(name) {
     fs.mkdirSync(path.dirname(SCREENSAVER_QML), { recursive: true });
     // Written in place: the bind mount follows the file, so an update is live at once.
     fs.writeFileSync(SCREENSAVER_QML, fs.readFileSync(path.join(__dirname, 'tv', 'screensaver.qml')));
+  }
+  if (name === 'homeWatch') {
+    // Outside the app's folder: surface-manager keeps reading it while the app is being updated.
+    fs.writeFileSync(HOME_KEY_FILTER, fs.readFileSync(path.join(__dirname, 'tv', 'home-key.js')));
   }
   fs.writeFileSync(dest, fs.readFileSync(path.join(__dirname, 'tv', f.script)));
   fs.chmodSync(dest, 493);   // 0755

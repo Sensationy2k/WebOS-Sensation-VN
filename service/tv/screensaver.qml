@@ -14,6 +14,7 @@ import QtQuick 2.4
 import QtQuick.Window 2.2
 import Eos.Window 0.1
 import Qt.labs.folderlistmodel 2.1
+import QtMultimedia 5.12
 
 WebOSWindow {
     id: window
@@ -33,6 +34,18 @@ WebOSWindow {
     property var queue: []
     property var front: null     // the slide on screen (one of two, crossfading)
     property bool started: false
+    // Chosen in the launcher (Settings → screensaver zoom): 1x zooms each picture to 108% while it is
+    // on screen, 2x to 116%. service/service.js writes {"zoomSpeed"} to settingsFile.
+    property string settingsFile: "file:///media/internal/tvhome-screensaver.json"
+    property real zoomSpeed: 2
+
+    // Music, chosen in the launcher (Settings → screensaver music): service/service.js writes
+    // {"mode": "off" | "radio" | "phone", "url"} to musicConfig; phone songs are in musicDir.
+    property string musicConfig: "file:///media/internal/tvhome-music.json"
+    property string musicDir: "file:///media/internal/tvhome-music"
+    property real musicVolume: 0.35   // quiet: it plays under a sleeping TV
+    property string musicMode: "off"
+    property var songQueue: []
 
     FolderListModel {
         id: photos
@@ -93,7 +106,71 @@ WebOSWindow {
         });
     }
 
-    Component.onCompleted: loadBing()
+    Component.onCompleted: { loadSettings(); loadBing(); loadMusic(); }
+
+    function loadSettings() {
+        var xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return;
+            try { window.zoomSpeed = JSON.parse(xhr.responseText).zoomSpeed || window.zoomSpeed; } catch (e) { /* never set */ }
+        };
+        xhr.open("GET", settingsFile + "?" + Date.now());
+        xhr.send();
+    }
+
+    // ---- music -------------------------------------------------------------------------------
+
+    function loadMusic() {
+        var xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return;
+            var config;
+            try { config = JSON.parse(xhr.responseText); } catch (e) { return; }   // never chosen
+            window.musicMode = config.mode || "off";
+            if (config.mode === "radio" && config.url) play(config.url);
+            else if (config.mode === "phone") nextSong();   // or once the folder has been read
+        };
+        xhr.open("GET", musicConfig + "?" + Date.now());
+        xhr.send();
+    }
+
+    function play(url) {
+        player.volume = 0;
+        player.source = url;
+        player.play();
+        fadeIn.restart();
+    }
+
+    function nextSong() {
+        if (!songQueue.length) {
+            var list = [];
+            for (var i = 0; i < songs.count; i++) list.push(songs.get(i, "fileURL").toString());
+            songQueue = shuffle(list);
+        }
+        if (songQueue.length) play(songQueue.shift());
+    }
+
+    FolderListModel {
+        id: songs
+        folder: window.musicDir
+        nameFilters: ["*.mp3", "*.m4a", "*.aac", "*.ogg", "*.wav", "*.flac"]
+        showDirs: false
+        onCountChanged: if (window.musicMode === "phone" && player.playbackState !== MediaPlayer.PlayingState) window.nextSong()
+    }
+
+    MediaPlayer {
+        id: player
+        onStatusChanged: {
+            if (window.musicMode !== "phone") return;
+            if (status === MediaPlayer.EndOfMedia || status === MediaPlayer.InvalidMedia) window.nextSong();
+        }
+        // A radio stream that drops: try again in a little while.
+        onError: if (window.musicMode === "radio") retry.restart()
+    }
+
+    Timer { id: retry; interval: 15000; onTriggered: window.loadMusic() }
+
+    NumberAnimation { id: fadeIn; target: player; property: "volume"; to: window.musicVolume; duration: 6000 }
 
     Timer {
         interval: window.slideMs
@@ -220,7 +297,7 @@ WebOSWindow {
                     id: zoom
                     running: false
                     from: 1.0
-                    to: 1.08
+                    to: 1 + 0.08 * window.zoomSpeed
                     duration: window.slideMs + 2 * window.fadeMs
                 }
             }

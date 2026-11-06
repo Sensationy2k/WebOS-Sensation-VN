@@ -77,6 +77,13 @@
     <button id="send">Gửi lên TV</button>
   </section>
 
+  <section>
+    <h2>Nhạc nền cho trình bảo vệ màn hình</h2>
+    <p class="hint">Chọn một hay nhiều bài (MP3, M4A…). Trên TV, vào Settings → Nhạc nền screensaver → Nhạc gửi từ điện thoại.</p>
+    <label class="pick" for="music">Chọn nhạc</label>
+    <input id="music" type="file" accept="audio/*" multiple>
+  </section>
+
   <p id="status"></p>
 </main>
 <script>
@@ -135,6 +142,29 @@
       .then(function () { status('Đã đổi hình nền trên TV', 'ok'); })
       .catch(function (e) { status(e.message === 'Failed to fetch' ? 'Mất kết nối với TV: mở lại bảng Hình nền trên TV' : e.message, 'err'); })
       .then(function () { btn.disabled = false; });
+  });
+
+  // Songs go one at a time: a phone's upload of several big files at once tends to stall.
+  document.getElementById('music').addEventListener('change', function () {
+    var files = Array.prototype.slice.call(this.files), done = 0;
+    this.value = '';
+    if (!files.length) return;
+    (function next() {
+      if (done === files.length) { status('Đã gửi ' + done + ' bài lên TV', 'ok'); return; }
+      var f = files[done];
+      status('Đang gửi bài ' + (done + 1) + '/' + files.length + ': ' + f.name + '…');
+      fetch('/music', {
+        method: 'POST',
+        headers: { 'Content-Type': f.type || 'application/octet-stream', 'X-File-Name': encodeURIComponent(f.name) },
+        body: f
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) throw new Error(f.name + ': ' + (j.error || 'lỗi'));
+        done++;
+        next();
+      }).catch(function (e) {
+        status(e.message === 'Failed to fetch' ? 'Mất kết nối với TV: mở lại bảng Hình nền trên TV' : e.message, 'err');
+      });
+    })();
   });
 </script>
 </body>

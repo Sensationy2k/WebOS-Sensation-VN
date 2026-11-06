@@ -30,7 +30,8 @@
   var $ = function (id) { return document.getElementById(id); };
   var stage = $('stage'), tilesEl = $('tiles'), glass = $('glass'), hero = $('hero');
   var ambients = [$('ambientA'), $('ambientB')], ambientFront = 0, ambientColor = null;
-  var pills = [$('btnInputs'), $('btnWifi'), $('btnWallpaper'), $('btnLgHome'), $('btnSettings')];
+  var headerBottom = null;
+  var pills = [$('btnInputs'), $('btnWifi'), $('btnWallpaper'), $('btnScreensaver'), $('btnLgHome'), $('btnSettings')];
   var panel = $('inputsPanel'), tileMenu = $('tileMenu');
 
   var items = [];               // {app, el, color}
@@ -157,7 +158,8 @@
       name.textContent = app.title;
       el.appendChild(name);
       el.addEventListener('mouseover', function () {
-        if (zone !== 'inputs' && !editing) focusTile(items.indexOf(item));
+        // A Magic Remote pointer passing over a tile must not take the keys from an open panel or menu.
+        if (zone !== 'inputs' && zone !== 'menu' && zone !== 'wall' && !editing) focusTile(items.indexOf(item));
       });
       el.addEventListener('click', function () {
         if (editing) finishEdit(true);
@@ -189,7 +191,8 @@
   function animateIn() {
     items.forEach(function (it, i) {
       it.el.classList.remove('shown');
-      setTimeout(function () { it.el.classList.add('shown'); }, 60 + Math.min(i, 16) * 40);
+      // A quick ripple: coming back from an app should not feel like waiting.
+      setTimeout(function () { it.el.classList.add('shown'); }, 30 + Math.min(i, 12) * 20);
     });
   }
 
@@ -321,15 +324,20 @@
       if (top - offset - 24 < VIEW_TOP) offset = top - 24 - VIEW_TOP;
     }
     stage.style.transform = 'translateY(' + (-offset) + 'px)';
-    // Keep the header until the content (the dock band is topmost) would run into it.
-    var header = document.querySelector('header');
-    var headerBottom = header.offsetTop + header.offsetHeight;   // layout box: ignores the hide slide
+    // Keep the header until the content (the dock band is topmost) would run into it. Measured once:
+    // reading layout here would force it on every key press.
+    if (headerBottom === null) {
+      var header = document.querySelector('header');
+      headerBottom = header.offsetTop + header.offsetHeight;   // layout box: ignores the hide slide
+    }
     document.body.classList.toggle('scrolled', DOCK_TOP - 28 - offset < headerBottom + 24);
 
     var w = TILE_W * FOCUS_SCALE + 2 * GLASS_PAD, h = TILE_H * FOCUS_SCALE + 2 * GLASS_PAD;
     var x = tileLeft(i) + TILE_W / 2 - w / 2, y = top + TILE_H / 2 - h / 2;
-    glass.style.width = w + 'px';
-    glass.style.height = h + 'px';
+    if (!glass.style.width) {   // the same size for every tile
+      glass.style.width = w + 'px';
+      glass.style.height = h + 'px';
+    }
     glass.style.transform = 'translate(' + x + 'px,' + y + 'px)';
     if (!glassShown) {
       // First show: jump there without the spring, then fade in.
@@ -388,7 +396,7 @@
     if (key === ambientColor) return;
     ambientColor = key;
     var back = ambients[1 - ambientFront];
-    back.style.background = 'radial-gradient(circle 1190px at 32% 42%, rgba(' + key + ',0.36) 0%, rgba(' +
+    back.style.background = 'radial-gradient(circle 298px at 32% 42%, rgba(' + key + ',0.36) 0%, rgba(' +   // a quarter size: see .ambient
       key + ',0.15) 50%, rgba(' + key + ',0) 100%)';
     back.style.opacity = '1';
     ambients[ambientFront].style.opacity = '0';
@@ -451,22 +459,27 @@
 
   function activatePill(i) {
     if (i === 0) showInputs();
-    else if (i === 1) launch('com.palm.app.settings', 'Settings', { target: 'network' });
+    // The settings app has no "network" target (it falls back to Picture): its Network item opens
+    // this page of the first-use app, the "Internet connection" one.
+    else if (i === 1) launch('com.webos.app.firstuse-overlay', 'Network', { target: 'network', appReturn: { appId: 'com.gathin.tvhome' } });
     else if (i === 2) showWallPanel();
-    else if (i === 3) openLgHome();
+    else if (i === 3) startScreensaver();
+    else if (i === 4) openLgHome();
+    else if (zone === 'menu' && menuPill === i) leaveMenu();   // the gear again: close its menu
     else showSettingsMenu();
   }
 
-  function showSettingsMenu() {
+  function showSettingsMenu(focusIndex) {
     showMenu('Cài đặt', [
       { label: 'Cài đặt TV', run: function () { leaveMenu(); launch('com.palm.app.settings', 'Settings'); } },
-      { label: 'Tính năng nâng cao', run: showFeaturesMenu },
+      { label: 'Tính năng nâng cao', sub: true, run: function () { showFeaturesMenu(); } },
+      { label: 'Trình bảo vệ màn hình', sub: true, run: function () { showScreensaverMenu(); } },
       { label: 'Làm mới danh sách app', run: function () {
         leaveMenu();
         toast('Đang đọc danh sách app…');
         refreshApps(function (ok) { toast(ok ? 'Đã làm mới danh sách app' : 'Không đọc được danh sách app'); });
       } }
-    ], 0, pills.length - 1);
+    ], focusIndex || 0, pills.length - 1);
   }
 
   /**
@@ -767,8 +780,14 @@
   }
 
   /** A small menu beside the focused tile; OK runs a row, Back closes. */
-  function showMenu(title, rows, focusIndex, pillIndex) {
+  /**
+   * rows: [{label, run, keep (a switch: the menu stays), sub (opens another menu: this one stays
+   * until that is ready)}]. back: what Left does, e.g. the menu this one came from; Back closes.
+   */
+  function showMenu(title, rows, focusIndex, pillIndex, back) {
     menuPill = pillIndex === undefined ? -1 : pillIndex;
+    menuBack = back || null;
+    menuBusy = false;
     tileMenu.innerHTML = '';
     var t = document.createElement('div');
     t.className = 'menuTitle';
@@ -783,13 +802,15 @@
       tileMenu.appendChild(row);
       return row;
     });
-    menuRows.forEach(function (row, i) { row.run = rows[i].run; row.keep = rows[i].keep; });
+    menuRows.forEach(function (row, i) { row.run = rows[i].run; row.keep = rows[i].keep; row.sub = rows[i].sub; });
 
     // Below the tile or pill, or above it near the bottom of the screen.
     var r = (menuPill >= 0 ? pills[menuPill] : items[focused].card).getBoundingClientRect();
-    tileMenu.style.left = Math.min(r.left, 1920 - 112 - 560) + 'px';
     tileMenu.style.minWidth = '420px';
+    tileMenu.style.left = '0px';
     tileMenu.classList.remove('hidden');
+    // Its own width: long rows must not run off the right edge.
+    tileMenu.style.left = Math.max(40, Math.min(r.left, 1920 - 40 - tileMenu.offsetWidth)) + 'px';
     var h = tileMenu.offsetHeight;
     tileMenu.style.top = (r.bottom + 24 + h < 1060 ? r.bottom + 24 : Math.max(40, r.top - 24 - h)) + 'px';
     zone = 'menu';
@@ -810,18 +831,26 @@
 
   /** Closes the menu and puts the focus back where it was opened from. */
   function leaveMenu() {
+    menuBusy = false;
     closeMenu();
     if (menuPill >= 0) { zone = 'none'; focusPill(menuPill); }
     else focusTile(focused);
   }
 
   var menuBusy = false;   // a row is waiting for the service: the menu stays and ignores OK
+  var menuBack = null;
+
+  function backMenu() {
+    if (menuBack && !menuBusy) menuBack(); else leaveMenu();   // busy: the service may never answer
+  }
 
   function runMenu(i) {
     var row = menuRows[i], run = row && row.run;
     if (menuBusy) return;
     if (!run) { leaveMenu(); return; }
     if (row.keep) { run(row); return; }   // e.g. a switch: the menu stays open
+    // Another menu, maybe after asking the service: this one keeps the keys until it is up.
+    if (row.sub) { menuBusy = true; row.textContent += '  …'; run(); return; }
     closeMenu();
     run();
   }
@@ -884,7 +913,7 @@
    * reads the TV's apps and turns the advanced features on and off. Without root (Developer Mode,
    * or no Homebrew Channel) the launcher uses apps.js from sync-apps.py as before.
    */
-  var VERSION = '1.2.0';   // as in appinfo.json: features get this version's scripts once
+  var VERSION = '1.3.0';   // as in appinfo.json: features get this version's scripts once
   var HBC = 'luna://org.webosbrew.hbchannel.service/';
   var APPS_KEY = 'tvhome.apps', ICONS_KEY = 'tvhome.icons', FEATURES_VERSION_KEY = 'tvhome.featuresVersion';
   var serviceRoot = false, features = {};
@@ -974,13 +1003,13 @@
     if (!serviceRoot) {
       showMenu('Tính năng nâng cao', [
         { label: 'Cần TV đã root bằng Homebrew Channel', run: null }
-      ], 0, pills.length - 1);
+      ], 0, pills.length - 1, function () { showSettingsMenu(1); });
       return;
     }
     showMenu('Tính năng nâng cao', FEATURE_LIST.map(function (f, i) {
       return { label: (features[f.name] ? 'Bật' : 'Tắt') + '  ·  ' + f.label, keep: true,
                run: function (row) { toggleFeature(f, i, row); } };
-    }), focusIndex || 0, pills.length - 1);
+    }), focusIndex || 0, pills.length - 1, function () { showSettingsMenu(1); });
   }
 
   function toggleFeature(f, i, row) {
@@ -997,6 +1026,92 @@
         toast((on ? 'Đã bật: ' : 'Đã tắt: ') + f.label + note);
       }
       if (zone === 'menu') showFeaturesMenu(i);   // still open: show the new state
+    });
+  }
+
+  // ---- screensaver ------------------------------------------------------------------------
+
+  function startScreensaver() {
+    luna(SERVICE + 'startScreensaver', {}, function (res) {
+      if (!res.returnValue) toast(res.errorCode === 'NOT_ROOT' || res.errorCode === 'DENIED' ? 'Cần TV đã root bằng Homebrew Channel' : 'Không bật được trình bảo vệ màn hình');
+    });
+  }
+
+  /** Settings → Screensaver: start it now, its music, its zoom. */
+  function showScreensaverMenu(focusIndex) {
+    showMenu('Trình bảo vệ màn hình', [
+      { label: 'Bật ngay', run: function () { leaveMenu(); startScreensaver(); } },
+      { label: 'Nhạc nền', sub: true, run: function () { showMusicMenu(); } },
+      { label: 'Tốc độ zoom ảnh', sub: true, run: function () { showZoomMenu(); } }
+    ], focusIndex || 0, pills.length - 1, function () { showSettingsMenu(2); });
+  }
+
+  // How fast each picture zooms in while it is on screen (service/tv/screensaver.qml).
+  var ZOOM_SPEEDS = [1, 1.5, 2];
+
+  function showZoomMenu(focusIndex) {
+    luna(SERVICE + 'screensaver', {}, function (res) {
+      var cur = (res.config && res.config.zoomSpeed) || 2;
+      showMenu('Tốc độ zoom ảnh', ZOOM_SPEEDS.map(function (z, i) {
+        return { label: (cur === z ? '●  ' : '○  ') + String(z).replace('.', ',') + 'x', keep: true,
+                 run: function () { setZoom(z, i); } };
+      }), focusIndex === undefined ? ZOOM_SPEEDS.indexOf(cur) : focusIndex, pills.length - 1,
+      function () { showScreensaverMenu(2); });
+    });
+  }
+
+  function setZoom(z, i) {
+    luna(SERVICE + 'setScreensaver', { zoomSpeed: z }, function (res) {
+      toast(res.returnValue ? 'Tốc độ zoom ' + String(z).replace('.', ',') + 'x' : (res.errorText || 'Không đổi được'));
+      if (zone === 'menu') showZoomMenu(i);
+    });
+  }
+
+  // ---- screensaver music -----------------------------------------------------------------
+
+  // Gentle classical and instrumental internet radio, ad-free (http, as LG's media pipeline can't
+  // open https streams): RadioArt and SomaFM (listener-supported); or songs sent from a phone through
+  // the wallpaper panel's page. The screensaver (service/tv/screensaver.qml) plays it.
+  var STATIONS = [
+    { title: 'Giao hưởng (RadioArt Orchestral)', url: 'http://live.radioart.com/fOrchestral.mp3' },
+    { title: 'Cổ điển (RadioArt Classical)', url: 'http://live.radioart.com/fClassical.mp3' },
+    { title: 'Piano (RadioArt)', url: 'http://live.radioart.com/fPiano.mp3' },
+    { title: 'Piano, violin, cello thư giãn (RadioArt)', url: 'http://live.radioart.com/fRelaxing.mp3' },
+    { title: 'Baroque (RadioArt)', url: 'http://live.radioart.com/fBaroque.mp3' },
+    { title: 'Mozart (RadioArt)', url: 'http://live.radioart.com/fMozart.mp3' },
+    { title: 'Ambient nhẹ (SomaFM Drone Zone)', url: 'http://ice1.somafm.com/dronezone-128-mp3' }
+  ];
+
+  function showMusicMenu(focusIndex) {
+    luna(SERVICE + 'music', {}, function (res) {
+      if (!res.returnValue) { toast('Không đọc được cài đặt nhạc'); showScreensaverMenu(1); return; }
+      var cur = res.config || { mode: 'off' }, n = (res.songs || []).length;
+      function mark(on, label) { return (on ? '●  ' : '○  ') + label; }
+      var rows = [{ label: mark(cur.mode === 'off', 'Tắt'), keep: true, run: function () { setMusic({ mode: 'off' }, 0); } }];
+      STATIONS.forEach(function (st, i) {
+        rows.push({ label: mark(cur.mode === 'radio' && cur.url === st.url, st.title), keep: true,
+                    run: function () { setMusic({ mode: 'radio', url: st.url, title: st.title }, i + 1); } });
+      });
+      rows.push({
+        label: mark(cur.mode === 'phone', 'Nhạc gửi từ điện thoại (' + n + ' bài)'),
+        keep: true,
+        run: function () {
+          if (n) { setMusic({ mode: 'phone' }, STATIONS.length + 1); return; }
+          // None yet: the QR code for the phone page is in the wallpaper panel.
+          leaveMenu();
+          showWallPanel();
+          toast('Quét mã QR bằng điện thoại để gửi nhạc');
+        }
+      });
+      showMenu('Nhạc nền', rows, focusIndex === undefined ? 0 : focusIndex, pills.length - 1,
+               function () { showScreensaverMenu(1); });
+    });
+  }
+
+  function setMusic(config, i) {
+    luna(SERVICE + 'setMusic', config, function (res) {
+      toast(res.returnValue ? (config.mode === 'off' ? 'Đã tắt nhạc nền' : 'Lần tới screensaver sẽ có nhạc') : (res.errorText || 'Không đổi được'));
+      if (zone === 'menu') showMusicMenu(i);
     });
   }
 
@@ -1072,8 +1187,9 @@
       if (k === KEY.UP) focusMenu(menuFocus - 1);
       else if (k === KEY.DOWN) focusMenu(menuFocus + 1);
       else if (k === KEY.OK) runMenu(menuFocus);
-      else if (k === KEY.BACK || k === KEY.ESC || k === KEY.LEFT || k === KEY.RIGHT) leaveMenu();
-      else return;
+      else if (k === KEY.BACK || k === KEY.ESC) leaveMenu();
+      else if (k === KEY.LEFT) backMenu();
+      else if (k !== KEY.RIGHT) return;
     } else if (zone === 'wall') {
       var wcol = wpFocus % WP_COLUMNS, wlast = wpCards.length - 1;
       if (k === KEY.LEFT) { if (wcol > 0) focusWallCard(wpFocus - 1); }
@@ -1111,7 +1227,7 @@
   });
 
   pills.forEach(function (p, i) {
-    p.addEventListener('mouseover', function () { if (zone !== 'inputs' && zone !== 'wall') focusPill(i); });
+    p.addEventListener('mouseover', function () { if (zone !== 'inputs' && zone !== 'wall' && zone !== 'menu') focusPill(i); });
     p.addEventListener('click', function () { activatePill(i); });
   });
 

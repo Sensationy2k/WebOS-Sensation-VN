@@ -27,6 +27,7 @@ html, body {
   background-size: cover;
   opacity: 0;
   transition: opacity 600ms ease;
+  will-change: opacity;   /* its own GPU layer: never repainted as the focus moves */
 }
 
 body.hasWallpaper #wallpaper { opacity: 1; }
@@ -44,11 +45,19 @@ body.hasWallpaper #dockBand { background: rgba(20, 20, 22, 0.55); }
 
 /* ---- ambient glow ---------------------------------------------------------------------------- */
 
+/* Painted at a quarter of the screen and scaled up by the GPU: a soft gradient looks the same, and
+   each new colour paints 1/16 of the pixels. */
 .ambient {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  width: 480px;
+  height: 270px;
+  transform: scale(4);
+  transform-origin: 0 0;
   opacity: 0;
   transition: opacity 600ms ease;
+  will-change: opacity;
   pointer-events: none;
 }
 
@@ -154,12 +163,12 @@ body.scrolled header {
 
 .pill svg { width: 44px; height: 44px; margin-right: 18px; fill: currentColor; }
 
-/* Icon-only pill (Wallpaper). */
+/* Icon-only pills (Wallpaper, screensaver, LG home, Settings). */
 .pill.round { width: 84px; padding: 0; justify-content: center; }
 .pill.round svg { margin-right: 0; }
 
 /* Long network names would push the pills into the date. */
-#wifiLabel { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+#wifiLabel { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
 
 .pill.focused {
   background: rgba(255, 255, 255, 0.96);
@@ -180,6 +189,7 @@ body.scrolled header {
   position: absolute;
   inset: 0;
   transition: transform 420ms cubic-bezier(0.25, 0.8, 0.3, 1);
+  will-change: transform;
 }
 
 /* The tvOS lighter band behind the dock row. */
@@ -226,6 +236,7 @@ body.editing #glass { opacity: 0 !important; }
   overflow: hidden;
   background: #1c1c1e;
   transition: transform 180ms ease;
+  will-change: transform;   /* a layer from the start: no repaint when the focus scales it */
 }
 
 /* Faint rim so black tiles (Apple TV) still read against the black page. */
@@ -288,6 +299,7 @@ body.editing #glass { opacity: 0 !important; }
   opacity: 0;
   pointer-events: none;
   transition: opacity 180ms ease, transform 520ms cubic-bezier(0.3, 1.35, 0.45, 1);
+  will-change: transform, opacity;
 }
 
 /* Bright top specular. */

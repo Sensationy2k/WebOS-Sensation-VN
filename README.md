@@ -22,6 +22,11 @@ Bản gốc tiếng Anh, kèm cách cài bằng Developer Mode, ở [README.en.m
   Bật TV vào Live TV hay HDMI không tín hiệu cũng tự về launcher.
 - **Trình bảo vệ màn hình riêng**: trình chiếu ảnh Bing và ảnh gửi từ điện thoại, có đồng hồ tiếng
   Việt, ảnh và đồng hồ di chuyển chậm để tránh lưu ảnh trên màn OLED. Thay luôn phần quảng cáo của LG.
+- **Nhạc nền nhẹ khi screensaver chạy**: radio cổ điển, giao hưởng nhẹ nhàng, không quảng cáo
+  (RadioArt: Giao hưởng, Cổ điển, Piano, Piano-violin-cello thư giãn, Baroque, Mozart; SomaFM:
+  Ambient) hoặc nhạc gửi từ điện thoại, âm lượng nhỏ và tăng dần.
+- **Nút bật screensaver ngay** (hình mặt trăng trên thanh trên cùng), và tuỳ chọn tốc độ zoom ảnh
+  1x, 1,5x, 2x.
 - **Nhẹ hơn**: tuỳ chọn không cho Google Assistant nằm sẵn trong RAM (khoảng 40 MB).
 
 | Chọn hình nền | Trình bảo vệ màn hình |
@@ -104,10 +109,22 @@ rồi commit `docs/apps.json` và `docs/manifest.json`.
 - **Settings**:
   - **Cài đặt TV**: cài đặt của LG.
   - **Tính năng nâng cao**: bấm OK để bật/tắt từng mục:
-    - **Nút Home luôn mở launcher**: bật TV vào Live TV hay HDMI không tín hiệu cũng về launcher.
+    - **Nút Home luôn mở launcher**: nút Home mở thẳng launcher (dưới nửa giây), không qua màn hình
+      LG. Launcher thay chỗ màn hình LG trong bộ nhớ (màn hình LG không còn được nạp sẵn), nên mở
+      app cũng nhanh. Bật TV vào Live TV hay HDMI không tín hiệu cũng về launcher. Tắt mục này là
+      mọi thứ về như cũ của LG.
     - **Trình bảo vệ màn hình Bing và ảnh**: thay luôn quảng cáo trong screensaver của LG.
     - **Không giữ Google Assistant trong RAM**: tắt đi thì khởi động lại TV để có lại.
+  - **Trình bảo vệ màn hình**:
+    - **Bật ngay** (cũng là nút mặt trăng trên thanh trên cùng).
+    - **Nhạc nền**: Tắt, một kênh radio cổ điển / không lời, hoặc **Nhạc gửi từ điện thoại**. Gửi
+      nhạc như gửi ảnh: mở Hình nền, quét mã QR, chọn **Chọn nhạc** (giữ 50 bài mới nhất), ví dụ
+      nhạc tải miễn phí từ Pixabay Music.
+    - **Tốc độ zoom ảnh**: 1x (chậm), 1,5x, 2x (mặc định).
+  - Trong menu: phím trái để quay lại menu trước, Back hoặc bấm lại bánh răng để đóng menu.
   - **Làm mới danh sách app**: danh sách cũng tự làm mới mỗi lần quay về launcher.
+- **Nút Wi-Fi**: mở thẳng trang Kết nối Internet của TV.
+- **Nút mặt trăng**: bật trình bảo vệ màn hình ngay (cần TV đã root). Bấm phím bất kỳ để thoát.
 - **Hình nền**: mở nút hình ảnh. Chọn Mặc định, Bing mỗi ngày, một ảnh Bing, hoặc quét mã QR bằng
   điện thoại cùng Wi-Fi để gửi ảnh. Trang gửi ảnh chỉ mở khi bảng Hình nền đang mở trên TV. Ảnh gửi
   lên cũng được thêm vào trình bảo vệ màn hình (giữ 60 ảnh mới nhất).
@@ -123,7 +140,7 @@ Mọi thay đổi trên TV đều đảo ngược được, file hệ thống c�
 - Gỡ app trước mà chưa tắt: các script vẫn nằm trong `/var/lib/webosbrew/init.d/` (`tvhome-homewatch`,
   `tvhome-screensaver`, `tvhome-noassistant`). Xoá chúng qua SSH rồi khởi động lại TV.
 
-Ảnh gửi từ điện thoại nằm ở `/media/internal/tvhome-photos`.
+Ảnh gửi từ điện thoại nằm ở `/media/internal/tvhome-photos`, nhạc ở `/media/internal/tvhome-music`.
 
 ## Xử lý sự cố
 
